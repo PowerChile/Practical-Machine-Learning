@@ -1,0 +1,260 @@
+---
+title: "Practical Machine Learning - Course Project"
+author: "Pedro Ramírez (PowerChile)"
+date: "February, 2015"
+output: html_document
+---
+
+### Overview
+The goal of the course project was to predict the manner in which a set of persons did an exercise, i.e. the `classe` variable. For this purpose data from accelerometers on the belt, forearm, arm, and dumbell of 6 participants was used to create a prediction model using Machine Learning techniques.
+
+The data used for this assignment comes from this source:  http://groupware.les.inf.puc-rio.br/har
+
+
+### Prediction model implementation & testing
+#### Reading & filtering data
+The input data was read first, and then it was filtered by discarding the features that were not relevant for the prediction. This was done to both, the data used to build the model, i.e. `DataModel`, and also the final test cases data, i.e. `FinalTest`.
+
+
+```{r, eval=TRUE}
+## Reading data from csv files
+AUX_mod = read.csv('pml-training.csv', na.strings = 'NA', header = TRUE)    # Data for bulding/testing prediction model
+AUX_fte = read.csv('pml-testing.csv' , na.strings = 'NA', header = TRUE)    # Final test cases data
+
+## Removing data not required for the prediction model:
+##   - NAs columns
+##   - non-numerical columns (except 'classe')
+##   - Other columns: 'X', 'raw_timestamp_part_1', 'raw_timestamp_part_2', and 'num_window'
+
+# Searching columns to delete
+colsNAs   <- colSums(is.na(AUX_fte)) == nrow(AUX_fte)
+ColsNoNum <- !sapply(AUX_fte, is.numeric)
+ColsOther <- names(AUX_fte) == 'X' | names(AUX_fte) == 'raw_timestamp_part_1' | names(AUX_fte) == 'raw_timestamp_part_2' | names(AUX_fte) == 'num_window'
+cols2keep <- (colsNAs + ColsNoNum + ColsOther) == 0
+
+# Deleting columns from data
+DataModel <- AUX_mod[,cols2keep]    # Model data
+FinalTest <- AUX_fte[,cols2keep]    # Final test cases data
+
+# Getting rid of unused objects
+rm(AUX_mod, AUX_fte, colsNAs, ColsNoNum, ColsOther, cols2keep)
+```
+
+
+#### Loading required packages & partitioning model's training/testing data
+The packages required to build the prediction models are loaded first [[1]], and then, the data required to implement the model was partitioned into a training and a testing dataset (75% and 25% respectively).
+
+```{r, eval=TRUE}
+## Loading required packages
+library(lattice)
+library(ggplot2)
+library(caret)
+library(foreach)
+library(iterators)
+library(parallel)
+library(snow)
+library(doSNOW)
+set.seed(1852)
+
+## Model data splitting into training/testing datasets
+inTrain <- createDataPartition(y    = DataModel$classe,
+                               p    = 0.75            ,
+                               list = FALSE           )
+training <- DataModel[ inTrain,]
+testing  <- DataModel[-inTrain,]
+
+# Getting rid of unused objects
+rm(DataModel, inTrain)
+
+# Enabling parallel processing to reduce computational time
+cl <- makeCluster(detectCores() - 1, type = "SOCK")     # All cores except one
+registerDoSNOW(cl)
+```
+
+```{r, eval=TRUE}
+dim(training)
+```
+
+```{r, eval=TRUE}
+dim(testing)
+```
+
+#### Models creation & comparison
+Different models were trained and tested in order to find the model with the best performance. The models trained/tested were:
+
+1. CART [[2]]
+2. Random Forrest (RF) [[3]]
+3. Linear Discriminant Analysis (LDA) [[4]]
+4. Stochastic Gradient Boosting (GBM) [[5]]
+
+##### Models creation
+```{r, eval=TRUE}
+## Models creation
+
+# CART
+if (!file.exists('ModFit_CART.RData')){
+    ModFit_CART <- train(training$classe ~ .,
+                         method = 'rpart'   ,
+                         data   = training  )
+    
+    save(ModFit_CART, file = 'ModFit_CART.RData')
+}else{
+    load('ModFit_CART.RData')
+}
+
+# Random Forrest
+if (!file.exists('ModFit_RF.RData')){
+    ModFit_RF <- train(training$classe ~ .,
+                       method = 'rf'      ,
+                       data   = training  )
+    
+    save(ModFit_RF, file = 'ModFit_RF.RData')
+}else{
+    load('ModFit_RF.RData')
+}
+
+# Linear Discriminant Analysis
+if (!file.exists('ModFit_LDA.RData')){
+    ModFit_LDA <- train(training$classe ~ .,
+                        method = 'lda'  ,
+                        data   = training  )
+    
+    save(ModFit_LDA, file = 'ModFit_LDA.RData')
+}else{
+    load('ModFit_LDA.RData')
+}
+
+# Stochastic Gradient Boosting
+if (!file.exists('ModFit_GBM.RData')){
+    ModFit_GBM <- train(training$classe ~ .,
+                        method = 'gbm'     ,
+                        data   = training  )
+    
+    save(ModFit_GBM, file = 'ModFit_GBM.RData')
+}else{
+    load('ModFit_GBM.RData')
+}
+```
+
+##### Models comparison
+```{r, eval=TRUE}
+## Models prediction accuracy calculation
+
+# CART
+acc_CART <- predict(ModFit_CART, testing)
+CM_CART  <- confusionMatrix(testing$classe, acc_CART)
+
+# Random Forrest
+acc_RF <- predict(ModFit_RF, testing)
+CM_RF  <- confusionMatrix(testing$classe, acc_RF)
+
+# Linear Discriminant Analysis
+acc_LDA <- predict(ModFit_LDA, testing)
+CM_LDA  <- confusionMatrix(testing$classe, acc_LDA)
+
+# Stochastic Gradient Boosting
+acc_GBM <- predict(ModFit_GBM, testing)
+CM_GBM  <- confusionMatrix(testing$classe, acc_GBM)
+
+
+# Selecting model with an accuracy level above a threshold value
+Accuracy <- c(CM_CART$overall[1], CM_RF$overall[1], CM_LDA$overall[1], CM_GBM$overall[1])
+names(Accuracy) <- c('CART', 'RF', 'LDA', 'GBM')
+Accuracy <- sort(Accuracy, decreasing = TRUE)
+print(Accuracy)
+
+Threshold <- 0.9
+SelectMod <- Accuracy[1:sum(Accuracy >= Threshold)]
+print(SelectMod)
+
+
+# Printing confusion matrix of selected models
+for(i in 1:length(SelectMod)){
+    print(paste('Confusion Matrix of model:',names(SelectMod[i]), sep = ' '))
+    print(eval(parse(text = paste('CM_', names(SelectMod[i]), sep = ''))))
+    cat('\n\n')
+}
+```
+From the list of models trained and tested, only the models with an accuracy level equal or larger than 90% were analyzed. The best performance was achieved by the **Random Forrest** model (Model RF) with an accuracy level of **99.78%**, followed by the Stochastic Gradient Boosting model (Model GBM) with an accuracy level of 95.82%.
+
+#### Model cross-validation & out-of-sample error
+##### Cross-validation
+As it was analized in the previous section, the **Model RF** outperformed all other models, and was selected for further analysis and for the final prediction task. In order to cross-validate the model, and also avoid overfitting, a 10-fold cross-validation with 5 times repetition was performed to train the model.
+
+```{r, eval=TRUE}
+## Model RF_cv - Cross-validation
+if (!file.exists('ModFit_RF_cv.RData')){
+    set.seed(1852)
+    trainCtrl    <- trainControl(method  = 'repeatedcv',
+                                 number  = 10          ,
+                                 repeats = 5           )
+    ModFit_RF_cv <- train(training$classe ~ .   ,
+                           method    = 'rf'     ,
+                           data      = training ,
+                           trControl = trainCtrl)
+    save(ModFit_RF_cv, file = 'ModFit_RF_cv.RData')
+}else{
+    load('ModFit_RF_cv.RData')
+}
+print(ModFit_RF_cv)
+
+# Model RF_cv - Prediction accuracy calculation
+acc_RF_cv <- predict(ModFit_RF_cv, testing)
+CM_RF_cv  <- confusionMatrix(testing$classe, acc_RF_cv)
+print(CM_RF_cv)
+```
+
+After performing the cross-validation, the accuracy of the Random Forrest with cross-validation model (Model RF_cv) was **99.51%**, which is approximately the same as before. The difference observed in the accuracy is due to the first time the Model RF was trained using bootstrap, which underestimates the error [[6]].
+
+```{r, eval=TRUE}
+#  Model RF_cv - Accuracy plot
+plot(ModFit_RF_cv, lwd = 2, main = 'Model RF_cv Accuracy')
+```
+
+The most important predictor for the Model RF_cv is the `roll_belt` variable, as shown in the figure below.
+
+```{r, eval=TRUE}
+# Model RF_cv - Predictors importance
+plot(varImp(ModFit_RF_cv, scale = TRUE), top = 25, lwd = 2, main = 'Predictors Importance')
+```
+
+
+##### Out-of-sample error
+The out-of-sample error of the Model RF_cv was estimated to be **0.49%**.
+```{r, eval=TRUE}
+## Model RF_c - Out-of-sample error
+OutOfSampleError <- 100*(1 - CM_RF_cv$overall[1])
+paste0('Out-of-sample error estimation Model RF: ', round(OutOfSampleError, digits = 2), '%')
+```
+
+
+### Test cases results
+Applying the Model RF_cv to the final test data, i.e. `FinalTest`, the predictions for each test case were as follows:
+
+```{r, eval=TRUE}
+## Model RF_cv - Prediction for test cases
+prediction_TestCases <-predict(ModFit_RF_cv, FinalTest[,-53])
+print(prediction_TestCases)
+```
+
+Finally, the prediction results were written each into a text final for final submission.
+
+```{r, eval=TRUE}
+## Model RF_cv - Final submission text files creation
+pml_write_files = function(x){
+  n = length(x)
+  for(i in 1:n){
+    filename = paste0("problem_id_",i,".txt")
+    write.table(x[i], file = filename, quote = FALSE, row.names = FALSE, col.names = FALSE)
+  }
+}
+
+pml_write_files(as.character(prediction_TestCases))
+```
+
+[1]: http://cran.r-project.org/web/packages/caret/caret.pdf
+[2]: http://cran.r-project.org/web/packages/rpart/rpart.pdf
+[3]: http://cran.r-project.org/web/packages/randomForest/randomForest.pdf
+[4]: http://cran.r-project.org/web/packages/lda/lda.pdf
+[5]: http://cran.r-project.org/web/packages/gbm/gbm.pdf
+[6]: https://d396qusza40orc.cloudfront.net/predmachlearn/008crossValidation.pdf
